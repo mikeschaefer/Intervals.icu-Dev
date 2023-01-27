@@ -2,14 +2,19 @@
     const activity = icu.activity;
     const streams = icu.streams;
 
-    const crankLength_mm = activity.crank_length;
-    const crankLength_m = crankLength_mm / 1000;
+    // config vars
+    const crankLength_mm = activity.crank_length || 172.5;
     const ftp = activity.icu_ftp;
+    const minCadence = 20;
+    const maxPower = ftp * 6;
 
+    // script
+
+    const crankLength_m = crankLength_mm / 1000;
     let pwr = [];
     let cad = [];
 
-    const pwrStream = streams.get('watts');
+    const pwrStream = streams.get('fixed_watts');
     if (pwrStream != null) {
         pwr = pwrStream.data;
     }
@@ -19,9 +24,14 @@
         cad = cadStream.data;
     }
 
-    const range = getFloorCeil(pwr);
     const baseAepf = aepf(ftp, 80, crankLength_m);
     const baseCvp = cpv(80, crankLength_m);
+
+    let numQuad1 = 0;
+    let numQuad2 = 0;
+    let numQuad3 = 0;
+    let numQuad4 = 0;
+    let numTotal = 0;
 
     const x = [];
     const y = [];
@@ -32,28 +42,53 @@
     let aepfMax = 0;
 
     pwr.forEach((P, idx) => {
-        if (P && P < range.maxValue && P >= range.minValue) {
-            const C = cad[idx];
+        const C = cad[idx];
+
+        if (P && C && P < maxPower && C > minCadence) {
             const cpvVal = cpv(C, crankLength_m);
             const aepfVal = aepf(P, C, crankLength_m);
 
-            if(!isNaN(cpvVal) && cpvVal > cpvMax) { 
-                cpvMax = cpvVal;
-            }
+            if(!isNaN(cpvVal) && !isNaN(aepfVal)) {
+                if(cpvVal > cpvMax) { 
+                    cpvMax = cpvVal;
+                }
+    
+                if(aepfVal !== Infinity && aepfVal > aepfMax) {
+                    aepfMax = aepfVal;
+                }
 
-            if(!isNaN(aepfVal) && aepfVal !== Infinity && aepfVal > aepfMax) {
-                aepfMax = aepfVal;
-            }
+                // quadrant 1 (top right) count
+                if(cpvVal >= baseCvp && aepfVal >= baseAepf) {
+                    numQuad1++;
+                }
+                // quadrant 2 (top left) count
+                if(cpvVal < baseCvp && aepfVal >= baseAepf) {
+                    numQuad2++;
+                }
+                // quadrant 3 (bottom left) count
+                if(cpvVal < baseCvp && aepfVal < baseAepf) {
+                    numQuad3++;
+                }
+                // quadrant 4 (bottom right) count
+                if(cpvVal >= baseCvp && aepfVal < baseAepf) {
+                    numQuad4++;
+                }
 
-            x.push(cpvVal);
-            y.push(aepfVal);
+                numTotal++;
+
+                x.push(cpvVal);
+                y.push(aepfVal);
+            }
         }
     });
 
-    for(let i = 0; i <=120; i++) {
+    for(let i = 0; i <=200; i++) {
         ftpParabolaX.push(cpv(i, crankLength_m));
         ftpParabolaY.push(aepf(ftp, i, crankLength_m));
     }
+
+    cpvMax += .5
+    aepfMax += 10;
 
     let data = [
         {
@@ -134,30 +169,30 @@
         },
         annotations: [
             {
+                x: cpvMax - .1,
+                y: baseAepf + 30,
+                text: `HF / HV (${Math.round(numQuad1 / numTotal * 100)}%)`,
+                showarrow: false,
+                ...annotationSettings
+            },
+            {
                 x: .1,
                 y: baseAepf + 30,
-                text: 'HF / LV',
+                text: `HF / LV (${Math.round(numQuad2 / numTotal * 100)}%)`,
                 showarrow: false,
                 ...annotationSettings
             },
             {
                 x: .1,
                 y: baseAepf - 30,
-                text: 'LF / LV',
-                showarrow: false,
-                ...annotationSettings
-            },
-            {
-                x: cpvMax - .1,
-                y: baseAepf + 30,
-                text: 'HF / HV',
+                text: `LF / LV (${Math.round(numQuad3 / numTotal * 100)}%)`,
                 showarrow: false,
                 ...annotationSettings
             },
             {
                 x: cpvMax - .1,
                 y: baseAepf - 30,
-                text: 'LF / HV',
+                text: `LF / HV (${Math.round(numQuad4 / numTotal * 100)}%)`,
                 showarrow: false,
                 ...annotationSettings
             }
@@ -173,30 +208,4 @@ function aepf(power, cadence, cranklength) {
 
 function cpv(cadence, cranklength) {
     return (cadence * cranklength * 2 * Math.PI) / 60;
-}
-
-function getFloorCeil(arr) {
-    if (arr.length < 4) return arr;
-
-    let values, q1, q3, iqr, maxValue, minValue;
-
-    values = arr.slice().sort((a, b) => a - b); //copy array fast and sort
-
-    if ((values.length / 4) % 1 === 0) {
-        //find quartiles
-        q1 = (1 / 2) * (values[values.length / 4] + values[values.length / 4 + 1]);
-        q3 = (1 / 2) * (values[values.length * (3 / 4)] + values[values.length * (3 / 4) + 1]);
-    } else {
-        q1 = values[Math.floor(values.length / 4 + 1)];
-        q3 = values[Math.ceil(values.length * (3 / 4) + 1)];
-    }
-
-    iqr = q3 - q1;
-    maxValue = q3 + iqr * 1.5;
-    minValue = q1 - iqr * 1.5;
-
-    return {
-        maxValue,
-        minValue,
-    };
 }
